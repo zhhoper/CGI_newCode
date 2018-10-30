@@ -1,0 +1,7 @@
+bash_trainCGI_fine.sh gives bash command how to train CGI on fine scale
+
+bash_trainCGI_coarse_lessData.sh and bash_trainCGI_coarse_lessData_continue.sh give bash commands how to train CGI on coarse scale
+
+refer to bash_debug.sh and bash_debug_fine.sh to prepare bash file
+
+in both trainCGI_coarse_lessData.py and trainCGI_fine.py, change listFolder and databaseFlder to correct folder, change missingData_v2.txt to an empty file (since we have all the ground truth normal now)
