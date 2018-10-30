@@ -324,7 +324,7 @@ def main(savePath, load_path, log_weight, lr=1e-3, weight_decay=0, total_epoch=1
         test_loss_list = []
         for i, data in enumerate(testLoader, 0):
             loss_miniBatch, output_albedo, output_normal, output_shading, \
-                    diff_normal, coarse_normal= networkForward(data, Testing=True)
+                    diff_normal, coarse_normal= networkForward(data, log_weight, optimizer, Testing=True)
             numLoss = len(loss_miniBatch['loss_list'])
             loss = loss_miniBatch['albedo'].data[0] + loss_miniBatch['albedo_grad'].data[0] + \
                     loss_miniBatch['shading'].data[0] + loss_miniBatch['shading_grad'].data[0] + \
