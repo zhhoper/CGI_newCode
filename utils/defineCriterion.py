@@ -153,10 +153,10 @@ class getLoss(object):
         imgMask = mask.expand(-1, 3, -1, -1)
         gradMask = mask.expand(-1, 6, -1, -1)
         
-        #loss_albedo = criterion(imgMask, torch.abs(albedo - alpha_albedo))
-        #loss_shading = criterion(imgMask, torch.abs(shading - alpha_shading))
-        loss_albedo = self.criterion(imgMask, (albedo - alpha_albedo)**2)
-        loss_shading = self.criterion(imgMask, (shading - alpha_shading)**2)
+        loss_albedo = self.criterion(imgMask, torch.abs(albedo - alpha_albedo))
+        loss_shading = self.criterion(imgMask, torch.abs(shading - alpha_shading))
+        #loss_albedo = self.criterion(imgMask, (albedo - alpha_albedo)**2)
+        #loss_shading = self.criterion(imgMask, (shading - alpha_shading)**2)
         
         loss_albedo_grad = self.criterion(gradMask, torch.abs(albedo_grad - alpha_albedo_grad))
         loss_shading_grad = self.criterion(gradMask, torch.abs(shading_grad - alpha_shading_grad))
@@ -165,6 +165,7 @@ class getLoss(object):
         loss_normal_grad = self.criterion(gradMask, torch.abs(normal_grad - output_normal_grad))
     
         loss_image = self.criterion(imgMask, (alpha_image - image**2.2)**2)
+        #loss_image = self.criterion(imgMask, (alpha_image - image**2.2)**2)
 
         # get log loss
         log_alpha_albedo = torch.log(F.relu(alpha_albedo) + 1e-6)
