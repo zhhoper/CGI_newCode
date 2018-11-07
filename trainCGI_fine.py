@@ -10,7 +10,6 @@ import os
 import numpy as np
 import time
 
-
 import torch
 # set random seed for all possible randomness
 np.random.seed(0)
@@ -23,16 +22,13 @@ import torchvision.transforms as transforms
 import torch.nn.functional as F
 from tensorboardX import SummaryWriter
 
-
-
-# load module defined by myself
+from defineHourglass_64 import *
 from defineDRN_normal import *
 from utils_shading import *
 from defineCriterion import *
 from loadData_CGI import *
 from defineHelp import *
 from defineHelp_lighting import *
-
 
 # image size to deal with
 IMAGE_SIZE=128
@@ -45,6 +41,8 @@ databaseFolder = '/scratch1/data/CGI/'
 
 criterion = mask_loss()
 
+my_network_coarse = HourglassNet(27)
+my_network_coarse.cuda()
 my_network = DRN(6, 6, 12)
 my_network.cuda()
 gradientLayer = gradientLayer_color()
@@ -57,7 +55,6 @@ samplingLightLayer = samplingLight()
 samplingLightLayer.cuda()
 
 getLoss = getLoss(criterion, gradientLayer)
-
 
 transformer = transforms.Compose([cropImg(output_size=IMAGE_SIZE), ToTensor()])
 transformer_test = transforms.Compose([testTransfer(output_size=IMAGE_SIZE), ToTensor()])
@@ -85,14 +82,6 @@ trainLoader = torch.utils.data.DataLoader(trainLoaderHelper,
 
 testLoader = torch.utils.data.DataLoader(testLoaderHelper, 
     batch_size=20, shuffle=False, num_workers=5)
-
-## get the normal/direction of positive and negative spheres
-## used to constrain lighting to be positive
-#sphereDirection_pos, sphereDirection_neg, sphereMask = getSHNormal(64)
-#sphereDirection_pos = Variable(torch.from_numpy(sphereDirection_pos).cuda()).float()
-#sphereDirection_neg = Variable(torch.from_numpy(sphereDirection_neg).cuda()).float()
-#sphereMask = Variable(torch.from_numpy(sphereMask).cuda()).float()
-
 
 def networkForward(data, log_weight, optimizer, Testing=False):
     '''
@@ -136,14 +125,13 @@ def networkForward(data, log_weight, optimizer, Testing=False):
     true_shading = shadingLayer(F.normalize(true_normal, p=2,dim=1), 
             true_lighting)
 
-    # compute loss
-    #loss_albedo, loss_shading, loss_albedo_grad, loss_shading_grad, \
-    #    loss_normal, loss_normal_grad = getLoss(true_albedo, 
-    #    true_shading, true_normal, albedo, shading, normal, mask)
     loss_albedo, loss_shading, loss_albedo_grad, loss_shading_grad, \
         loss_normal, loss_normal_grad, loss_image, log_loss = getLoss.getLoss(true_albedo, 
         true_shading, true_normal, albedo, shading, normal, mask, inputs)
-    
+
+    lightMask = mask.expand(-1, 27, -1, -1)
+    loss_light = criterion(lightMask, true_lighting**2)
+
     # append all the losses
     loss = {}
     loss['albedo'] = loss_albedo
@@ -152,6 +140,7 @@ def networkForward(data, log_weight, optimizer, Testing=False):
     loss['shading_grad'] = loss_shading_grad
     loss['normal'] = loss_normal
     loss['normal_grad'] = loss_normal_grad
+    loss['light'] = loss_light
     loss['loss_image'] = loss_image
 
     loss['log_albedo'] = log_loss['albedo']
@@ -160,13 +149,14 @@ def networkForward(data, log_weight, optimizer, Testing=False):
     loss['log_image'] = log_loss['image']
 
     loss['loss_list'] = [loss_albedo.data[0], loss_albedo_grad.data[0], loss_shading.data[0],
-        loss_shading_grad.data[0], loss_normal.data[0], loss_normal_grad.data[0], loss_image.data[0],
-        log_loss['albedo'].data[0], log_loss['shading'].data[0], log_loss['normal'].data[0], log_loss['image'].data[0]]
+        loss_shading_grad.data[0], loss_normal.data[0], loss_normal_grad.data[0], loss_light.data[0], 
+        loss_image.data[0], log_loss['albedo'], log_loss['shading'], log_loss['normal'], log_loss['image']]
+
     # return loss
     total_loss = loss['albedo'] + loss['albedo_grad'] + \
             loss['shading'] + loss['shading_grad'] + \
             loss['normal'] + loss['normal_grad'] + \
-            loss['loss_image'] + \
+            0.2*loss['light'] + loss['loss_image'] + \
             log_weight['albedo']*loss['log_albedo'] + \
             log_weight['shading']*loss['log_shading'] + \
             log_weight['normal']*loss['log_normal'] + \
@@ -192,20 +182,20 @@ def main(savePath, load_path, log_weight, lr=1e-3, weight_decay=0, total_epoch=1
     writer = SummaryWriter(os.path.join(savePath, 'tensorboard'))
     
     global my_network_coarse 
-    my_network_coarse = torch.load(os.path.join(load_path, 'trained_model.t7'))
+    my_network_coarse.load_state_dict(torch.load(load_path))
     my_network_coarse.cuda()
     my_network_coarse.train(False)
 
-    #my_network.load_state_dict(torch.load(load_model))
-    
     monitor_count = 20
     optimizer = optim.Adam(my_network.parameters(), lr = lr, weight_decay=weight_decay)
     fid = open(os.path.join(savePath, 'training.log'), 'w')
     fid_sep = open(os.path.join(savePath, 'training_sep.log'), 'w')
     fid_test = open(os.path.join(savePath, 'testing.log'), 'w')
     fid_test_sep = open(os.path.join(savePath, 'testing_sep.log'), 'w')
-    print>>fid_sep, 'albedo, albedo_grad, shading, shading_grad, normal, normal_grad, image, log_albedo, log_shading, log_normal, log_shading, log_image'
-    print>>fid_test_sep, 'albedo, albedo_grad, shading, shading_grad, normal, normal_grad, image, log_albedo, log_shading, log_normal, log_shading, log_image'
+    print>>fid_sep, 'albedo, albedo_grad, shading, shading_grad, normal, normal_grad, lighting, image,' + \
+            'log_albedo, log_shading, log_normal, log_image'
+    print>>fid_test_sep, 'albedo, albedo_grad, shading, shading_grad, normal, normal_grad, lighting, image, ' + \
+            'log_albedo, log_shading, log_normal, log_image'
 
     numIte_training = 0
     numIte_testing = 0
@@ -218,6 +208,7 @@ def main(savePath, load_path, log_weight, lr=1e-3, weight_decay=0, total_epoch=1
         running_albedo_loss = 0.0
         running_shading_loss = 0.0
         running_normal_loss = 0.0
+        running_light_loss = 0.0
         running_image_loss = 0.0
         running_log_albedo = 0.0
         running_log_shading = 0.0
@@ -242,16 +233,12 @@ def main(savePath, load_path, log_weight, lr=1e-3, weight_decay=0, total_epoch=1
             loss = loss_miniBatch['albedo'].data[0] + loss_miniBatch['albedo_grad'].data[0] + \
                     loss_miniBatch['shading'].data[0] + loss_miniBatch['shading_grad'].data[0] + \
                     loss_miniBatch['normal'].data[0] + loss_miniBatch['normal_grad'].data[0] + \
-                    loss_miniBatch['loss_image'].data[0] + \
+                    loss_miniBatch['light'].data[0] + loss_miniBatch['loss_image'].data[0]  + \
                     log_weight['albedo']*loss_miniBatch['log_albedo'].data[0] + \
                     log_weight['shading']*loss_miniBatch['log_shading'].data[0] + \
                     log_weight['normal']*loss_miniBatch['log_normal'].data[0] + \
                     log_weight['image']*loss_miniBatch['log_image'].data[0]
 
-            #loss.backward()
-            #print 'time used for one iteration is %s ' % (time.time() - begin_time)
-
-            #optimizer.step()
 
             loss_list.append(loss_miniBatch['loss_list'])
             tmp_loss_list.append(loss_miniBatch['loss_list'])
@@ -260,6 +247,7 @@ def main(savePath, load_path, log_weight, lr=1e-3, weight_decay=0, total_epoch=1
             running_albedo_loss  += loss_miniBatch['albedo'].data[0]
             running_shading_loss  += loss_miniBatch['shading'].data[0]
             running_normal_loss  += loss_miniBatch['normal'].data[0]
+            running_light_loss  += loss_miniBatch['light'].data[0]
             running_image_loss  += loss_miniBatch['loss_image'].data[0]
             running_log_albedo += loss_miniBatch['log_albedo'].data[0]
             running_log_shading += loss_miniBatch['log_shading'].data[0]
@@ -279,6 +267,7 @@ def main(savePath, load_path, log_weight, lr=1e-3, weight_decay=0, total_epoch=1
                 writer.add_scalar('train/loss_albedo', running_albedo_loss/monitor_count, numIte_training)
                 writer.add_scalar('train/loss_shading', running_shading_loss/monitor_count, numIte_training)
                 writer.add_scalar('train/loss_normal', running_normal_loss/monitor_count, numIte_training)
+                writer.add_scalar('train/loss_lighting', running_light_loss/monitor_count, numIte_training)
                 writer.add_scalar('train/loss_image', running_image_loss/monitor_count, numIte_training)
                 writer.add_scalar('train/loss_log_albedo', running_log_albedo/monitor_count, numIte_training)
                 writer.add_scalar('train/loss_log_shading', running_log_shading/monitor_count, numIte_training)
@@ -294,6 +283,7 @@ def main(savePath, load_path, log_weight, lr=1e-3, weight_decay=0, total_epoch=1
                 running_albedo_loss = 0
                 running_shading_loss = 0
                 running_normal_loss = 0
+                running_light_loss = 0
                 running_image_loss = 0
                 running_log_albedo = 0
                 running_log_shading = 0
@@ -314,6 +304,7 @@ def main(savePath, load_path, log_weight, lr=1e-3, weight_decay=0, total_epoch=1
         test_albedo_loss = 0
         test_shading_loss = 0
         test_normal_loss = 0
+        test_light_loss = 0
         test_image_loss = 0
         test_log_albedo = 0
         test_log_shading = 0
@@ -329,7 +320,7 @@ def main(savePath, load_path, log_weight, lr=1e-3, weight_decay=0, total_epoch=1
             loss = loss_miniBatch['albedo'].data[0] + loss_miniBatch['albedo_grad'].data[0] + \
                     loss_miniBatch['shading'].data[0] + loss_miniBatch['shading_grad'].data[0] + \
                     loss_miniBatch['normal'].data[0] + loss_miniBatch['normal_grad'].data[0] + \
-                    loss_miniBatch['loss_image'].data[0] + \
+                    loss_miniBatch['light'].data[0] + loss_miniBatch['loss_image'].data[0] + \
                     log_weight['albedo']*loss_miniBatch['log_albedo'].data[0]+ \
                     log_weight['shading']*loss_miniBatch['log_shading'].data[0] + \
                     log_weight['normal']*loss_miniBatch['log_normal'].data[0] + \
@@ -340,6 +331,7 @@ def main(savePath, load_path, log_weight, lr=1e-3, weight_decay=0, total_epoch=1
             test_albedo_loss  += loss_miniBatch['albedo'].data[0]
             test_shading_loss  += loss_miniBatch['shading'].data[0]
             test_normal_loss  += loss_miniBatch['normal'].data[0]
+            test_light_loss += loss_miniBatch['light']
             test_image_loss  += loss_miniBatch['loss_image'].data[0]
             test_log_albedo += loss_miniBatch['log_albedo']
             test_log_shading += loss_miniBatch['log_shading']
@@ -356,6 +348,7 @@ def main(savePath, load_path, log_weight, lr=1e-3, weight_decay=0, total_epoch=1
         writer.add_scalar('test/loss_albedo', test_albedo_loss/count, epoch)
         writer.add_scalar('test/loss_shading', test_shading_loss/count, epoch)
         writer.add_scalar('test/loss_normal', test_normal_loss/count, epoch)
+        writer.add_scalar('test/loss_light', test_light_loss/count, epoch)
         writer.add_scalar('test/loss_image', test_image_loss/count, epoch)
         writer.add_scalar('test/loss_log_albedo', test_log_albedo/count, epoch)
         writer.add_scalar('test/loss_log_shading', test_log_shading/count, epoch)
